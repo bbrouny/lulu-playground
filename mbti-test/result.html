@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MBTI Test - 결과</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles/base.css" />
+    <link rel="stylesheet" href="./styles/result.css" />
+  </head>
+  <body>
+    <main class="container resultRoot">
+      <h1 class="title">결과</h1>
+      <p class="subtitle">축별 %와 구간(균형/약/중/강) 기반 요약을 보여줍니다.</p>
+
+      <div class="card mt-16">
+        <div>
+          <div class="pill">MBTI 유형</div>
+          <p class="typeBig" id="type">----</p>
+          <p class="typeName" id="typeName">유형 명칭(더미)</p>
+
+          <div class="stack mt-12">
+            <div>
+              <h2 class="sectionTitle">분석 결과</h2>
+              <div class="muted" id="summary">분석 결과(더미)</div>
+            </div>
+
+            <div>
+              <h2 class="sectionTitle">강점</h2>
+              <ul class="list" id="strengths"></ul>
+            </div>
+
+            <div>
+              <h2 class="sectionTitle">리스크</h2>
+              <div class="muted" id="risk"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-16">
+          <div class="pill">4개 축</div>
+          <div class="grid" id="axes"></div>
+        </div>
+
+        <p class="muted mt-12" id="note"></p>
+        <div class="actions mt-12">
+          <button class="btn" id="copy" type="button">결과 복사</button>
+          <button class="btn" id="share" type="button">공유</button>
+        </div>
+      </div>
+
+      <div class="actions mt-12">
+        <a class="btn btnPrimary" href="./test.html" id="retry">다시하기</a>
+        <a class="btn" href="./index.html">홈</a>
+      </div>
+    </main>
+
+    <script type="module">
+      const LS_RESULT = "mbti:test:result:v1";
+      const $ = (id) => document.getElementById(id);
+
+      const typeEl = $("type");
+      const axesEl = $("axes");
+      const noteEl = $("note");
+      const retryEl = $("retry");
+      const copyEl = $("copy");
+      const shareEl = $("share");
+      const typeNameEl = $("typeName");
+      const summaryEl = $("summary");
+      const strengthsEl = $("strengths");
+      const riskEl = $("risk");
+
+      let lastSummaryText = "";
+
+      retryEl.addEventListener("click", () => {
+        try {
+          localStorage.removeItem("mbti:test:answers:v1");
+          localStorage.removeItem(LS_RESULT);
+        } catch {}
+      });
+
+      function axisRow(labelLeft, pctLeft, labelRight, pctRight, narrativeText) {
+        const div = document.createElement("div");
+        div.className = "axisCard";
+        const left = Number(pctLeft) || 0;
+        const right = Number(pctRight) || 0;
+        // 입력 자체가 %이므로 그대로 사용(합 100 가정)
+        const leftPct = Math.round(left);
+        const rightPct = Math.round(right);
+        const isHighLeft = leftPct >= rightPct;
+        const highPct = Math.max(leftPct, rightPct);
+        div.innerHTML = `
+          <div class="axisHeader"><div><strong>${labelLeft}</strong> ${leftPct}%</div><div><strong>${labelRight}</strong> ${rightPct}%</div></div>
+          <div class="axisBar" aria-hidden="true">
+            <div class="axisFill ${isHighLeft ? "isHighLeft" : "isHighRight"}" style="width:${highPct}%"></div>
+          </div>
+          <div class="axisMeta">${labelLeft} ${leftPct}% · ${labelRight} ${rightPct}%</div>
+          ${narrativeText ? `<div class="axisNarrative">${narrativeText}</div>` : ""}
+        `;
+        return div;
+      }
+
+      function dominant(axes, axisKey, leftKey, rightKey) {
+        const left = Number(axes?.[axisKey]?.[leftKey] ?? 0);
+        const right = Number(axes?.[axisKey]?.[rightKey] ?? 0);
+        if (left === 50 && right === 50) return { isBalance: true, dir: null, pct: 50 };
+        return left >= right
+          ? { isBalance: false, dir: leftKey, pct: left }
+          : { isBalance: false, dir: rightKey, pct: right };
+      }
+
+      function bucket(p) {
+        const pct = Number(p) || 0;
+        if (pct <= 50) return "50";
+        if (pct <= 60) return "51_60";
+        if (pct <= 75) return "61_75";
+        return "76_100";
+      }
+
+      function strengthLevel(pct) {
+        const p = Number(pct) || 0;
+        if (p >= 75) return "strong";
+        if (p >= 60) return "mid";
+        return "weak";
+      }
+
+      function pickNamingAxes(items) {
+        const strong = items.filter((x) => x.level === "strong");
+        if (strong.length) return strong.sort((a, b) => b.pct - a.pct).slice(0, 2);
+        const mid = items.filter((x) => x.level === "mid");
+        if (mid.length) return mid.sort((a, b) => b.pct - a.pct).slice(0, 2);
+        return items.sort((a, b) => b.pct - a.pct).slice(0, 2);
+      }
+
+      function buildDynamicName(analysis, items) {
+        const dict = analysis?.axisDescriptors ?? {};
+        const chosen = pickNamingAxes(items);
+        const parts = chosen
+          .map((x) => dict?.[x.letter]?.[x.level] ?? "")
+          .filter(Boolean)
+          .slice(0, 2);
+        const base = parts.length ? parts.join(" ") : "데이터 기반";
+        return base.endsWith("형") ? base : `${base}형`;
+      }
+
+      // strongest 선택 로직(요구사항 기준) - 네이밍 로직과 분리
+      function selectStrongestAxes(candidates) {
+        const sorted = [...candidates].sort((a, b) => b.pct - a.pct);
+        const strong = sorted.filter((x) => x.level === "strong");
+        const mid = sorted.filter((x) => x.level === "mid");
+
+        /** @type {any[]} */
+        let chosen = [];
+
+        if (strong.length >= 2) {
+          chosen = strong.slice(0, 2);
+        } else if (strong.length === 1) {
+          const bestMid = mid[0] ?? sorted.find((x) => x !== strong[0]) ?? null;
+          chosen = bestMid ? [strong[0], bestMid] : [strong[0]];
+        } else {
+          // strong 0개면 mid 상위 2개 선택(부족하면 전체에서 보충)
+          chosen = mid.slice(0, 2);
+          if (chosen.length < 2) {
+            for (const x of sorted) {
+              if (chosen.includes(x)) continue;
+              chosen.push(x);
+              if (chosen.length === 2) break;
+            }
+          }
+        }
+
+        chosen = chosen.sort((a, b) => b.pct - a.pct);
+        if (chosen.length >= 2 && chosen[0].pct - chosen[1].pct >= 10) {
+          return [chosen[0]];
+        }
+        return chosen.slice(0, 2);
+      }
+
+      function tpl(analysis, letter) {
+        return analysis?.strongTemplates?.[letter] ?? null;
+      }
+
+      function sentenceTake(text, maxSentences) {
+        const s = String(text ?? "").trim();
+        if (!s) return "";
+        const parts = s.split(/(?<=\.)\s+/).filter(Boolean);
+        return parts.slice(0, maxSentences).join(" ").trim();
+      }
+
+      function getNarrative(analysis, axisKey, dom) {
+        const axis = analysis?.axisNarratives?.[axisKey];
+        if (!axis) return "";
+        if (dom.isBalance) {
+          const b = axis.balance;
+          return b ? `<strong>${b.title}</strong><div class="muted axisSummary">${b.summary}</div>` : "";
+        }
+        const b = bucket(dom.pct);
+        const node = axis?.[dom.dir]?.[b];
+        return node ? `<strong>${node.title}</strong><div class="muted axisSummary">${node.summary}</div>` : "";
+      }
+
+      function render(result) {
+        typeEl.textContent = result?.type ?? "----";
+        axesEl.innerHTML = "";
+        strengthsEl.innerHTML = "";
+        riskEl.textContent = "";
+
+        const axes = result?.axes ?? {};
+        if (!axes || typeof axes !== "object") return;
+
+        const analysis = result?._analysis ?? null;
+        const typeKey = String(result?.type ?? "----");
+
+        const ei = dominant(axes, "EI", "E", "I");
+        const sn = dominant(axes, "SN", "S", "N");
+        const tf = dominant(axes, "TF", "T", "F");
+        const jp = dominant(axes, "JP", "J", "P");
+
+        // 동적 네이밍: 축 강도(weak/mid/strong) 기반으로 strongest 1~2개 축 조합
+        const letters = typeKey.length === 4 ? typeKey.split("") : ["E", "S", "T", "J"];
+        const namingItems = [
+          { axis: "EI", letter: ei.isBalance ? letters[0] : ei.dir, pct: ei.pct, level: strengthLevel(ei.pct) },
+          { axis: "SN", letter: sn.isBalance ? letters[1] : sn.dir, pct: sn.pct, level: strengthLevel(sn.pct) },
+          { axis: "TF", letter: tf.isBalance ? letters[2] : tf.dir, pct: tf.pct, level: strengthLevel(tf.pct) },
+          { axis: "JP", letter: jp.isBalance ? letters[3] : jp.dir, pct: jp.pct, level: strengthLevel(jp.pct) }
+        ];
+        const dynamicName = buildDynamicName(analysis, namingItems);
+        typeNameEl.textContent = dynamicName;
+
+        // strongest 1~2개 축 선택(요구사항의 strongest 규칙)
+        const strongest = selectStrongestAxes(namingItems);
+
+        // [분석 결과] 문장 중복 제거(완전 동일 + 앞부분 유사)
+        const coreTpl = tpl(analysis, strongest?.[0]?.letter);
+        const snTpl = tpl(analysis, namingItems[1].letter); // SN 축(항상 포함)
+        const tfTpl = tpl(analysis, namingItems[2].letter); // TF 축(항상 포함)
+        const jpTpl = tpl(analysis, namingItems[3].letter); // JP 축(항상 포함)
+
+        const seenExact = new Set();
+        const seenPrefix = new Set();
+        const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+        const splitSentences = (s) => norm(s).split(/(?<=\.)\s+/).filter(Boolean);
+        const takeUnique = (sentences) => {
+          /** @type {string[]} */
+          const out = [];
+          for (const raw of sentences) {
+            const t = norm(raw);
+            if (!t) continue;
+            const prefix = t.slice(0, 22); // "앞부분 동일" 유사 제거 기준(보수적으로)
+            if (seenExact.has(t) || seenPrefix.has(prefix)) continue;
+            seenExact.add(t);
+            seenPrefix.add(prefix);
+            out.push(t);
+          }
+          return out;
+        };
+        const sectionText = (parts, fallbackParts) => {
+          const uniq = takeUnique(parts.flatMap(splitSentences));
+          if (uniq.length) return uniq.join(" ");
+          const fb = takeUnique(fallbackParts.flatMap(splitSentences));
+          return fb.join(" ");
+        };
+
+        const s1 = sectionText([coreTpl?.core], [coreTpl?.mechanism]);
+        const s2 = sectionText([snTpl?.core, snTpl?.mechanism], [snTpl?.mechanism, snTpl?.core]);
+        const s3 = sectionText([tfTpl?.core, tfTpl?.mechanism], [tfTpl?.mechanism, tfTpl?.core]);
+        const s4 = sectionText([jpTpl?.core, jpTpl?.mechanism], [jpTpl?.mechanism, jpTpl?.core]);
+
+        summaryEl.innerHTML = `
+          <div><strong>1) 핵심 동력</strong><div class="axisSummary">${s1 || "데이터 없음"}</div></div>
+          <div class="mt-12"><strong>2) 인지 방식</strong><div class="axisSummary">${s2 || "데이터 없음"}</div></div>
+          <div class="mt-12"><strong>3) 판단 메커니즘</strong><div class="axisSummary">${s3 || "데이터 없음"}</div></div>
+          <div class="mt-12"><strong>4) 실행 스타일</strong><div class="axisSummary">${s4 || "데이터 없음"}</div></div>
+        `;
+
+        // <강점> - strongest 축 중 strong(75%+)만 강조
+        const strongOnly = strongest.filter((x) => x.level === "strong");
+        const strengths = [];
+        for (const x of strongOnly) {
+          const t = tpl(analysis, x.letter);
+          if (Array.isArray(t?.strengths)) strengths.push(...t.strengths);
+        }
+        const uniqStrengths = [...new Set(strengths.map((s) => String(s)))].filter(Boolean);
+        if (!uniqStrengths.length) {
+          const li = document.createElement("li");
+          li.textContent = "강한 축(75%+)이 없어 강점 템플릿이 제한적으로 표시됩니다.";
+          strengthsEl.appendChild(li);
+        } else {
+          for (const s of uniqStrengths.slice(0, 8)) {
+            const li = document.createElement("li");
+            li.textContent = s;
+            strengthsEl.appendChild(li);
+          }
+        }
+
+        // <리스크> - strongest 1~2개 축의 risk 기반, 2~4문장 이내 요약
+        const risks = strongest
+          .map((x) => tpl(analysis, x.letter)?.risk ?? "")
+          .filter((s) => String(s).trim().length > 0);
+        const riskText = risks
+          .map((r, i) => sentenceTake(r, risks.length === 1 ? 4 : 2))
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        riskEl.textContent = riskText || "데이터 없음";
+
+        if (axes.EI) axesEl.appendChild(axisRow("E", axes.EI.E, "I", axes.EI.I, getNarrative(analysis, "EI", ei)));
+        if (axes.SN) axesEl.appendChild(axisRow("S", axes.SN.S, "N", axes.SN.N, getNarrative(analysis, "SN", sn)));
+        if (axes.TF) axesEl.appendChild(axisRow("T", axes.TF.T, "F", axes.TF.F, getNarrative(analysis, "TF", tf)));
+        if (axes.JP) axesEl.appendChild(axisRow("J", axes.JP.J, "P", axes.JP.P, getNarrative(analysis, "JP", jp)));
+
+        const ties = Array.isArray(result?.ties) ? result.ties : [];
+        noteEl.textContent = ties.length ? `균형(동률) 축: ${ties.join(", ")}` : "";
+
+        lastSummaryText = [
+          `MBTI 결과: ${result?.type ?? "----"}`,
+          `유형 명칭: ${dynamicName}`,
+          `E/I: E ${axes?.EI?.E ?? "-"}% / I ${axes?.EI?.I ?? "-"}%`,
+          `S/N: S ${axes?.SN?.S ?? "-"}% / N ${axes?.SN?.N ?? "-"}%`,
+          `T/F: T ${axes?.TF?.T ?? "-"}% / F ${axes?.TF?.F ?? "-"}%`,
+          `J/P: J ${axes?.JP?.J ?? "-"}% / P ${axes?.JP?.P ?? "-"}%`,
+          ties.length ? `동률 축: ${ties.join(", ")}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      async function loadAnalysis() {
+        try {
+          const res = await fetch("./data/analysis_v1.json", { cache: "no-store" });
+          if (!res.ok) return null;
+          return await res.json();
+        } catch {
+          return null;
+        }
+      }
+
+      copyEl.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(lastSummaryText || "");
+          noteEl.textContent = "결과를 클립보드에 복사했어요.";
+        } catch {
+          noteEl.textContent = "복사에 실패했어요. (브라우저 권한/환경 확인)";
+        }
+      });
+
+      shareEl.addEventListener("click", async () => {
+        try {
+          if (!navigator.share) {
+            noteEl.textContent = "이 브라우저는 공유 기능(Web Share API)을 지원하지 않아요.";
+            return;
+          }
+          await navigator.share({
+            title: "MBTI 테스트 결과",
+            text: lastSummaryText || "",
+            url: window.location.href
+          });
+        } catch {
+          // 사용자가 취소할 수도 있으니 조용히 무시
+        }
+      });
+
+      try {
+        const raw = localStorage.getItem(LS_RESULT);
+        if (!raw) {
+          typeEl.textContent = "결과 없음";
+          noteEl.textContent = "먼저 테스트를 진행해주세요.";
+        } else {
+          const result = JSON.parse(raw);
+          const analysis = await loadAnalysis();
+          // 분석 데이터는 화면 렌더링에만 사용(점수/유형 결정과 분리)
+          if (analysis) result._analysis = analysis;
+          render(result);
+        }
+      } catch (err) {
+        typeEl.textContent = "오류";
+        noteEl.textContent = String(err);
+      }
+    </script>
+  </body>
+</html>
