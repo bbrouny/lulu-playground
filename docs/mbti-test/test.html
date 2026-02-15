@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MBTI Test - 질문</title>
+    <link rel="stylesheet" href="./styles/base.css" />
+  </head>
+  <body>
+    <main class="container">
+      <div class="topbar">
+        <h1 class="title">질문</h1>
+        <div class="pill" id="progress">-/-</div>
+      </div>
+
+      <div class="progressWrap">
+        <progress id="progressBar" value="0" max="32"></progress>
+      </div>
+
+      <div class="card mt-16">
+        <p class="qId" id="qid"></p>
+        <h2 class="qPrompt" id="prompt">불러오는 중…</h2>
+        <div class="row">
+          <button class="btn btnPrimary" id="choiceA" type="button">A</button>
+          <button class="btn btnPrimary" id="choiceB" type="button">B</button>
+        </div>
+      </div>
+
+      <div class="actions mt-12">
+        <button class="btn" id="prev" type="button">이전</button>
+        <button class="btn" id="reset" type="button">처음부터</button>
+        <a class="btn" href="./index.html">홈</a>
+      </div>
+
+      <p class="muted mt-12">선택하면 자동으로 다음 문항으로 넘어갑니다.</p>
+    </main>
+
+    <script type="module">
+      import { scoreTest } from "./src/scoring.js";
+
+      const LS_ANSWERS = "mbti:test:answers:v1";
+      const LS_RESULT = "mbti:test:result:v1";
+
+      const $ = (id) => document.getElementById(id);
+      const progressEl = $("progress");
+      const progressBarEl = $("progressBar");
+      const qidEl = $("qid");
+      const promptEl = $("prompt");
+      const choiceAEl = $("choiceA");
+      const choiceBEl = $("choiceB");
+      const prevEl = $("prev");
+      const resetEl = $("reset");
+
+      /** @type {{ id: string, choiceId: "A"|"B" }[]} */
+      const answers = [];
+      let questions = [];
+      let idx = 0;
+
+      function saveProgress() {
+        localStorage.setItem(LS_ANSWERS, JSON.stringify({ version: "1.0", answers }));
+      }
+
+      function clearProgress() {
+        try {
+          localStorage.removeItem(LS_ANSWERS);
+          localStorage.removeItem(LS_RESULT);
+        } catch {}
+      }
+
+      function render() {
+        const q = questions[idx];
+        progressEl.textContent = `${Math.min(idx + 1, questions.length)}/${questions.length}`;
+        progressBarEl.max = questions.length || 1;
+        progressBarEl.value = Math.min(idx, questions.length);
+        qidEl.textContent = q?.id ? `문항 ${q.id}` : "";
+        promptEl.textContent = q?.prompt ?? "질문이 없습니다.";
+        choiceAEl.textContent = q?.choices?.[0]?.text ?? "A";
+        choiceBEl.textContent = q?.choices?.[1]?.text ?? "B";
+        choiceAEl.disabled = !q;
+        choiceBEl.disabled = !q;
+        prevEl.disabled = idx <= 0;
+      }
+
+      function answer(choiceId) {
+        const q = questions[idx];
+        if (!q) return;
+        answers.push({ id: q.id, choiceId });
+        idx += 1;
+
+        saveProgress();
+
+        if (idx >= questions.length) {
+          const result = scoreTest({ questions, answers });
+          localStorage.setItem(LS_RESULT, JSON.stringify(result));
+          window.location.href = "./result.html";
+          return;
+        }
+        render();
+      }
+
+      choiceAEl.addEventListener("click", () => answer("A"));
+      choiceBEl.addEventListener("click", () => answer("B"));
+      prevEl.addEventListener("click", () => {
+        if (idx <= 0) return;
+        answers.pop();
+        idx = Math.max(0, idx - 1);
+        saveProgress();
+        render();
+      });
+      resetEl.addEventListener("click", () => {
+        answers.length = 0;
+        idx = 0;
+        clearProgress();
+        render();
+      });
+
+      function restoreProgress() {
+        try {
+          const raw = localStorage.getItem(LS_ANSWERS);
+          if (!raw) return;
+          const parsed = JSON.parse(raw);
+          const saved = Array.isArray(parsed?.answers) ? parsed.answers : [];
+
+          const allowedIds = new Set(questions.map((q) => String(q?.id ?? "")));
+          const cleaned = saved
+            .filter((a) => allowedIds.has(String(a?.id ?? "")))
+            .filter((a) => a?.choiceId === "A" || a?.choiceId === "B");
+
+          answers.length = 0;
+          answers.push(...cleaned);
+          idx = Math.min(answers.length, questions.length);
+        } catch {
+          // 저장 데이터가 깨졌으면 무시
+        }
+      }
+
+      async function init() {
+        const res = await fetch("./data/questions_v1.json", { cache: "no-store" });
+        const data = await res.json();
+        questions = Array.isArray(data.questions) ? data.questions : [];
+        if (!questions.length) {
+          promptEl.textContent = "questions_v1.json에 questions[]가 비어있습니다.";
+          choiceAEl.disabled = true;
+          choiceBEl.disabled = true;
+          progressEl.textContent = "0/0";
+          return;
+        }
+
+        restoreProgress();
+        if (idx >= questions.length) {
+          const result = scoreTest({ questions, answers });
+          localStorage.setItem(LS_RESULT, JSON.stringify(result));
+          window.location.href = "./result.html";
+          return;
+        }
+        render();
+      }
+
+      init().catch((err) => {
+        promptEl.textContent = "질문 데이터를 불러오지 못했습니다.";
+        qidEl.textContent = String(err);
+        choiceAEl.disabled = true;
+        choiceBEl.disabled = true;
+      });
+    </script>
+  </body>
+</html>

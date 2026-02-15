@@ -1,0 +1,27 @@
+/* Result page only overrides */
+
+.resultRoot{
+  /* 결과 페이지 컨테이너에만 적용 */
+  font-family: "Gowun Dodum", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* 캐릭터 영역 제거 후 레이아웃 자연스럽게 */
+.resultRoot .profileGrid{
+  grid-template-columns: 1fr; /* 혹시 남아있어도 1컬럼 */
+}
+
+/* bar: 낮은 쪽은 회색, 높은 쪽만 컬러(좌/우 채움) */
+.resultRoot .axisBar{
+  position: relative;
+  background: #ddd; /* low side */
+}
+.resultRoot .axisFill{
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  background: linear-gradient(90deg, rgba(124,115,255,.75), rgba(143,231,214,.85));
+}
+.resultRoot .axisFill.isHighLeft{ left: 0; right: auto; }
+.resultRoot .axisFill.isHighRight{ right: 0; left: auto; }
+
